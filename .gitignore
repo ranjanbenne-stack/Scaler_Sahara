@@ -1,0 +1,13 @@
+node_modules/
+.next/
+out/
+coverage/
+.pgdata/
+.pgdata-test/
+*.log
+.env
+.env.*
+!.env.example
+next-env.d.ts
+*.tsbuildinfo
+.next-build/

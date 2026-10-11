@@ -1,0 +1,249 @@
+// SAHARA MVP data model. PostgreSQL is the source of truth.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum MemberRole {
+  PARENT
+  CHILD
+}
+
+enum RequestStatus {
+  RECEIVED      // persisted, classification pending or complete, no human action yet
+  NEEDS_REVIEW  // classifier failed / low confidence / possible emergency signal
+  ESCALATED     // emergency raised, awaiting acknowledgement
+  ACKNOWLEDGED  // emergency acknowledged by an authorized responder
+  CLOSED
+}
+
+enum Urgency {
+  routine
+  time_sensitive
+  urgent
+  emergency
+}
+
+enum DetectionSource {
+  RULE_SOS        // exact "SOS" keyword
+  RULE_PHRASE     // deterministic emergency phrase
+  RULE_POSSIBLE   // possible-emergency signal (floor applied, flagged for review)
+  LLM             // structured LLM classification
+  FALLBACK        // classifier unavailable or invalid output
+}
+
+enum OutboxStatus {
+  PENDING
+  SENDING
+  SENT
+  FAILED  // last attempt failed, will be retried
+  DEAD      // retries exhausted
+  CANCELLED // no longer relevant (e.g. escalation re-alert after the alert was acknowledged)
+}
+
+enum NotificationKind {
+  NORMAL
+  ATTENTION
+  EMERGENCY
+  ESCALATION
+  PARENT_ACK
+  SYSTEM
+}
+
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  displayName  String
+  email        String?  @unique
+  passwordHash String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  memberships   HouseholdMembership[]
+  telegram      TelegramAccount?
+  sessions      Session[]
+  requests      Request[]             @relation("ParentRequests")
+  acknowledged  Request[]             @relation("AckBy")
+  notifications NotificationOutbox[]
+
+  @@map("users")
+}
+
+model Household {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships  HouseholdMembership[]
+  requests     Request[]
+  pairingCodes PairingCode[]
+
+  @@map("households")
+}
+
+model HouseholdMembership {
+  id                 String     @id @default(uuid()) @db.Uuid
+  householdId        String     @db.Uuid
+  userId             String     @db.Uuid
+  role               MemberRole
+  isEmergencyContact Boolean    @default(false)
+  // Lower numbers are notified first; escalation proceeds to the next order value.
+  escalationOrder    Int        @default(1)
+  createdAt          DateTime   @default(now())
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([householdId, userId])
+  @@index([userId])
+  @@map("household_memberships")
+}
+
+model TelegramAccount {
+  id             String   @id @default(uuid()) @db.Uuid
+  userId         String   @unique @db.Uuid
+  telegramUserId BigInt   @unique
+  chatId         BigInt
+  username       String?  // informational only; NEVER used for identity
+  // True once the user has sent /start in a private chat, so the bot may DM them.
+  botStarted     Boolean  @default(false)
+  linkedAt       DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("telegram_accounts")
+}
+
+model PairingCode {
+  id                   String     @id @default(uuid()) @db.Uuid
+  householdId          String     @db.Uuid
+  createdById          String     @db.Uuid
+  role                 MemberRole
+  // For a CHILD code: the dashboard user the Telegram account will be linked to.
+  // For a PARENT code: null until redeemed (a parent user is created/linked on redemption).
+  targetUserId         String?    @db.Uuid
+  parentDisplayName    String?
+  codeHash             String     @unique
+  expiresAt            DateTime
+  usedAt               DateTime?
+  usedByTelegramUserId BigInt?
+  createdAt            DateTime   @default(now())
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+
+  @@index([householdId])
+  @@map("pairing_codes")
+}
+
+model Session {
+  id        String   @id @default(uuid()) @db.Uuid
+  tokenHash String   @unique
+  userId    String   @db.Uuid
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+// One row per Telegram update_id processed — webhook retries are no-ops.
+model TelegramUpdate {
+  updateId   BigInt   @id
+  receivedAt DateTime @default(now())
+  outcome    String
+  requestId  String?  @db.Uuid
+
+  @@map("telegram_updates")
+}
+
+model Request {
+  id                   String          @id @default(uuid()) @db.Uuid
+  reference            Int             @unique @default(autoincrement())
+  householdId          String          @db.Uuid
+  parentUserId         String          @db.Uuid
+  telegramUpdateId     BigInt?         @unique
+  originalMessage      String
+  category             String
+  serviceType          String?
+  issueSummary         String?
+  urgency              Urgency
+  isEmergency          Boolean         @default(false)
+  confidence           Float?
+  needsReview          Boolean         @default(false)
+  clarificationQuestion String?
+  status               RequestStatus   @default(RECEIVED)
+  detectionSource      DetectionSource
+  classificationMeta   Json?
+  acknowledgedAt       DateTime?
+  acknowledgedById     String?         @db.Uuid
+  escalationLevel      Int             @default(0)
+  nextEscalationAt     DateTime?
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
+
+  household      Household            @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  parent         User                 @relation("ParentRequests", fields: [parentUserId], references: [id])
+  acknowledgedBy User?                @relation("AckBy", fields: [acknowledgedById], references: [id])
+  events         RequestEvent[]
+  notifications  NotificationOutbox[]
+
+  @@index([householdId, createdAt])
+  @@index([isEmergency, status, nextEscalationAt])
+  @@map("requests")
+}
+
+model RequestEvent {
+  id          String   @id @default(uuid()) @db.Uuid
+  requestId   String   @db.Uuid
+  type        String   // RECEIVED, EMERGENCY_DETECTED, CLASSIFIED, CLASSIFICATION_FAILED, ESCALATED, NOTIFICATION_*, ACKNOWLEDGED ...
+  actorUserId String?  @db.Uuid
+  data        Json?
+  createdAt   DateTime @default(now())
+
+  request Request @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([requestId, createdAt])
+  @@map("request_events")
+}
+
+model NotificationOutbox {
+  id                String           @id @default(uuid()) @db.Uuid
+  requestId         String?          @db.Uuid
+  recipientUserId   String           @db.Uuid
+  channel           String           @default("telegram")
+  kind              NotificationKind
+  chatId            BigInt
+  text              String
+  idempotencyKey    String           @unique
+  status            OutboxStatus     @default(PENDING)
+  attempts          Int              @default(0)
+  maxAttempts       Int              @default(5)
+  nextAttemptAt     DateTime         @default(now())
+  lastError         String?
+  providerMessageId String?
+  sentAt            DateTime?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  request   Request? @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  recipient User     @relation(fields: [recipientUserId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextAttemptAt])
+  @@map("notification_outbox")
+}
+
+model RateLimitBucket {
+  key         String
+  windowStart DateTime
+  count       Int      @default(0)
+
+  @@id([key, windowStart])
+  @@map("rate_limit_buckets")
+}
