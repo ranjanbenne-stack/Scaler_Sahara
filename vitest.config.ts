@@ -7,7 +7,7 @@ export default defineConfig({
     environment: "node",
     globalSetup: ["./tests/global-setup.ts"],
     setupFiles: ["./tests/setup.ts"],
-    // Tests share one isolated PostgreSQL instance and truncate between tests.
+    // Tests share one SQLite file and clear it between tests.
     fileParallelism: false,
     testTimeout: 30_000,
     hookTimeout: 120_000,

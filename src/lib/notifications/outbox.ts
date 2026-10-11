@@ -1,6 +1,5 @@
 import { Prisma, type NotificationKind, type NotificationOutbox } from "@prisma/client";
 import type { Deps } from "../deps";
-import { utcTs } from "../db";
 import { EventType, recordEvent } from "../events";
 import { log } from "../logger";
 
@@ -27,16 +26,21 @@ export interface EnqueueInput {
 export async function enqueueNotifications(tx: Tx, deps: Deps, items: EnqueueInput[]): Promise<string[]> {
   if (items.length === 0) return [];
   const now = deps.now();
-  await tx.notificationOutbox.createMany({
-    data: items.map((i) => ({
-      ...i,
-      channel: deps.channel.name,
-      maxAttempts: EMERGENCY_KINDS.includes(i.kind) ? deps.config.NOTIFY_EMERGENCY_MAX_ATTEMPTS : deps.config.NOTIFY_MAX_ATTEMPTS,
-      nextAttemptAt: now,
-      createdAt: now,
-    })),
-    skipDuplicates: true,
-  });
+  for (const item of items) {
+    try {
+      await tx.notificationOutbox.create({
+        data: {
+          ...item,
+          channel: deps.channel.name,
+          maxAttempts: EMERGENCY_KINDS.includes(item.kind) ? deps.config.NOTIFY_EMERGENCY_MAX_ATTEMPTS : deps.config.NOTIFY_MAX_ATTEMPTS,
+          nextAttemptAt: now,
+          createdAt: now,
+        },
+      });
+    } catch (err) {
+      if (!(err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002")) throw err;
+    }
+  }
   const rows = await tx.notificationOutbox.findMany({
     where: { idempotencyKey: { in: items.map((i) => i.idempotencyKey) } },
     select: { id: true, requestId: true, kind: true, recipientUserId: true },
@@ -57,23 +61,40 @@ export function retryDelayMs(kind: NotificationKind, attempts: number, retryAfte
     : Math.min(30_000 * 2 ** (attempts - 1), 30 * 60_000);
 }
 
+function kindRank(kind: NotificationKind): number {
+  if (kind === "EMERGENCY" || kind === "ESCALATION") return 0;
+  if (kind === "ATTENTION") return 1;
+  return 2;
+}
+
 /**
- * Atomically claim due rows (FOR UPDATE SKIP LOCKED) so concurrent workers and
- * inline dispatch never send the same row twice. Emergency kinds go first.
+ * Claim due rows inside a transaction so a retry does not send the same row twice.
+ * Emergency kinds go first. Safe for the single web process that owns the SQLite file.
  */
 async function claim(deps: Deps, ids: string[] | undefined, limit: number): Promise<NotificationOutbox[]> {
   const now = deps.now();
-  const idFilter = ids && ids.length > 0 ? Prisma.sql`AND id = ANY(${ids}::uuid[])` : Prisma.empty;
-  return deps.db.$queryRaw<NotificationOutbox[]>`
-    UPDATE notification_outbox SET status = 'SENDING', attempts = attempts + 1, "updatedAt" = ${utcTs(now)}
-    WHERE id IN (
-      SELECT id FROM notification_outbox
-      WHERE status IN ('PENDING', 'FAILED') AND "nextAttemptAt" <= ${utcTs(now)} ${idFilter}
-      ORDER BY CASE WHEN kind IN ('EMERGENCY', 'ESCALATION') THEN 0 WHEN kind = 'ATTENTION' THEN 1 ELSE 2 END, "createdAt"
-      LIMIT ${limit}
-      FOR UPDATE SKIP LOCKED
-    )
-    RETURNING *`;
+  return deps.db.$transaction(async (tx) => {
+    const candidates = await tx.notificationOutbox.findMany({
+      where: {
+        status: { in: ["PENDING", "FAILED"] },
+        nextAttemptAt: { lte: now },
+        ...(ids && ids.length > 0 ? { id: { in: ids } } : {}),
+      },
+    });
+    candidates.sort((a, b) => kindRank(a.kind) - kindRank(b.kind) || a.createdAt.getTime() - b.createdAt.getTime());
+    const picked = candidates.slice(0, limit);
+    const claimed: NotificationOutbox[] = [];
+    for (const row of picked) {
+      const updated = await tx.notificationOutbox.updateMany({
+        where: { id: row.id, status: { in: ["PENDING", "FAILED"] } },
+        data: { status: "SENDING", attempts: { increment: 1 } },
+      });
+      if (updated.count !== 1) continue;
+      const fresh = await tx.notificationOutbox.findUnique({ where: { id: row.id } });
+      if (fresh) claimed.push(fresh);
+    }
+    return claimed;
+  });
 }
 
 export interface DispatchSummary {

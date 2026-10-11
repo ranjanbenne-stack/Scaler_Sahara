@@ -1,6 +1,6 @@
 # SAHARA MVP — Telegram intake, LLM classification, child dashboard, SOS alerts
 
-An elderly parent messages a Telegram bot. SAHARA identifies the parent's household, detects emergencies with **deterministic rules first**, classifies normal requests with an LLM (Google Gemini), stores everything in PostgreSQL, shows it on an authenticated dashboard for the parent's children, and notifies them on Telegram. SOS runs a separate escalation flow that only ends when a human acknowledges it.
+An elderly parent messages a Telegram bot. SAHARA identifies the parent's household, detects emergencies with **deterministic rules first**, classifies normal requests with an LLM (Google Gemini), stores everything in a SQLite file next to the app, shows it on an authenticated dashboard for the parent's children, and notifies them on Telegram. SOS runs a separate escalation flow that only ends when a human acknowledges it.
 
 > **Scope:** intake, classification, tracking and notification only. Nothing is booked, paid for or dispatched. SAHARA never contacts emergency services.
 
@@ -22,9 +22,9 @@ Telegram ──webhook (secret header)──► /api/telegram/webhook ─┐
                      │        Gemini (timeout, strict Zod) → safety   │
                      │        rules → outbox → dispatch               │
                      └────────────────────────────────────────────────┘
-PostgreSQL (source of truth) ◄── Next.js dashboard (polling, session auth, household-scoped)
+SQLite file (lives with the app) ◄── Next.js dashboard (polling, session auth, household-scoped)
             ▲
- worker (npm run worker): escalation rounds · outbox retries · crash recovery
+ worker (inside the server in production; `npm run worker` locally): escalation rounds · outbox retries · crash recovery
 ```
 
 | Piece | Location |
@@ -47,7 +47,7 @@ PostgreSQL (source of truth) ◄── Next.js dashboard (polling, session auth,
 - **Idempotency:**
   - `update_id` primary key: webhook retries are no-ops.
   - Outbox `idempotencyKey`: no duplicate notifications.
-  - `FOR UPDATE SKIP LOCKED` row claiming and optimistic escalation guards: safe with several workers.
+  - Outbox rows are claimed inside a transaction. Run one app process so the SQLite file has a single writer.
 
 ### Data model
 `users`, `households`, `household_memberships` (role PARENT/CHILD, `isEmergencyContact`, `escalationOrder`), `telegram_accounts` (numeric user/chat ids, `botStarted`), `pairing_codes` (SHA-256 hashed, single-use, TTL), `sessions` (hashed tokens), `telegram_updates` (dedupe), `requests`, `request_events` (audit timeline), `notification_outbox`, `rate_limit_buckets`. Multiple children per household are supported.
@@ -56,7 +56,7 @@ PostgreSQL (source of truth) ◄── Next.js dashboard (polling, session auth,
 
 ## 2. Local setup
 
-**Requirements:** Node.js 20+ (tested on 23) and npm. PostgreSQL is optional: the repo can run an embedded PostgreSQL from npm, so Docker isn't needed.
+**Requirements:** Node.js 20+ (tested on 23) and npm. Data is a SQLite file. There is no separate database to install.
 
 ```bash
 npm install
@@ -69,13 +69,9 @@ cp .env.example .env
 Edit `.env` (see §3 and §4 for the Telegram and Gemini values). Then, in separate terminals:
 
 ```bash
-npm run db:local
-```
-(This starts embedded PostgreSQL on port 5433 with data in `./.pgdata`. Skip it if `DATABASE_URL` points at your own Postgres.)
-
-```bash
 npm run db:deploy
 ```
+(This creates `data/sahara.sqlite` from `DATABASE_URL` in `.env`.)
 
 ```bash
 npm run dev:all
@@ -179,7 +175,7 @@ npm run bot:simulate -- --from 111000111 SOS
 npm test
 ```
 
-The test suite starts its own throwaway embedded PostgreSQL (port 54329, UTF-8) and applies the real migrations. Set `TEST_DATABASE_URL` to use a disposable database instead (e.g. in CI). Telegram, Gemini and the clock are mocked, so no paid API calls are made.
+The test suite creates a throwaway SQLite file and applies the real migrations. Set `TEST_DATABASE_URL` to a `file:` URL to reuse one. Telegram, Gemini and the clock are mocked, so no paid API calls are made.
 
 | # | Requirement | Test |
 |---|---|---|
@@ -200,7 +196,7 @@ The test suite starts its own throwaway embedded PostgreSQL (port 54329, UTF-8) 
 Use two Telegram accounts, A (child) and B (parent), on a network that can reach `api.telegram.org`.
 
 1. Configure `.env` with the real bot token, `NOTIFY_CHANNEL="telegram"` and `LLM_PROVIDER="gemini"` plus your key. Set `ESCALATION_ACK_TIMEOUT_SECONDS="60"` to make testing quicker.
-2. Run `npm run db:local`, `npm run db:deploy` and `npm run dev:all`.
+2. Run `npm run db:deploy` and `npm run dev:all`.
 3. Register the child account on the dashboard and link A, then B, as in §5. Check both show **Linked**.
 4. From a third account C, message the bot. Expect a *"not linked"* reply and no request on the dashboard.
 5. From B, send the electrician message. Within a few seconds the request appears with no page refresh, A receives the NON-EMERGENCY message, and B receives a receipt.
@@ -234,7 +230,7 @@ Use two Telegram accounts, A (child) and B (parent), on a network that can reach
   - The cookie is `httpOnly`, `SameSite=Lax` and `Secure` in production.
   - Mutating requests are checked against the same Origin.
 - Every request query is scoped to households where the user is a CHILD member. Other households' ids return 404.
-- **Rate limits (PostgreSQL-backed, so they work across instances):**
+- **Rate limits (stored in the SQLite file, for the single app process):**
   - inbound messages per sender
   - pairing attempts
   - logins per IP and per account
@@ -243,17 +239,18 @@ Use two Telegram accounts, A (child) and B (parent), on a network that can reach
 
 ---
 
-## 10. Production deployment
-1. Use a managed PostgreSQL and set `DATABASE_URL`. Run `npm run db:deploy` on each release.
-2. Run `npm run build && npm start` behind HTTPS (any Node host: VM, container, Render, Fly, Railway…). Set `APP_BASE_URL` to the public URL.
-3. Run **one or more** `npm run worker` processes continuously (systemd, a separate container, or a background worker service). Escalation depends on them.
-4. Register the webhook with `npm run bot:set-webhook`. Don't run `bot:poll` in production.
-5. Keep secrets in the platform's secret manager. Never set `NOTIFY_CHANNEL=console` (refused in production) or `DEMO_MODE=true`.
-6. Monitor:
-   - `notification_outbox` rows in `DEAD`
-   - `ESCALATED` requests older than a few minutes
-   - worker liveness
-7. Back up the database. `request_events` is the audit trail.
+## 10. Production deployment (Render)
+
+Host this as **one Render web service**. Do not add a Render Postgres database. `render.yaml` describes the service.
+
+1. In Render, create a **Web Service** from this repo (or use the Blueprint). Build command: `npm install && npm run build`. Start command: `npm start`.
+2. Set `DATABASE_URL` to `file:../data/sahara.sqlite`. `npm start` creates that file and applies migrations. The escalation worker starts inside the same process.
+3. Set `APP_BASE_URL` to the public Render URL (for example `https://sahara.onrender.com`).
+4. Set `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `TELEGRAM_BOT_USERNAME`, and `GEMINI_API_KEY`. Leave `NOTIFY_CHANNEL=telegram` and `DEMO_MODE=false`.
+5. After the service is up, register the webhook with `npm run bot:set-webhook` from a machine that has those env vars. Don't run `bot:poll` in production.
+6. **The SQLite file is less persistent on purpose.** Render's disk is wiped on restart and on every redeploy, so accounts, messages, and alerts are cleared. That avoids a separate database. Do not run more than one instance.
+
+Monitor `notification_outbox` rows in `DEAD` and `ESCALATED` requests that stay unacknowledged.
 
 ---
 
@@ -267,5 +264,6 @@ Use two Telegram accounts, A (child) and B (parent), on a network that can reach
 - **Voice notes, photos and location** from Telegram are ignored. Only text is processed.
 - **Telegram is the only real channel** (see §8).
 - **Delivery is at-least-once.** A worker crash mid-send can occasionally produce a duplicate Telegram message (rows stuck in SENDING are reclaimed after 2 minutes).
+- **Data does not survive a Render restart or redeploy.** The SQLite file is stored on the service disk only.
 - **Data lifecycle:** decide retention for message text and add a data-export and deletion workflow before handling real users' data.
 - **Gemini prompt and labels:** validate the prompt and the confidence threshold (`LLM_MIN_CONFIDENCE`) against real messages. Consider an evaluation set.

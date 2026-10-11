@@ -56,9 +56,17 @@ export type AppConfig = z.infer<typeof EnvSchema>;
 
 let cached: AppConfig | null = null;
 
+/** Render sets RENDER_EXTERNAL_URL. Use it when APP_BASE_URL was not provided. */
+function withRuntimeDefaults(env: Record<string, string | undefined>): Record<string, string | undefined> {
+  if (!env.APP_BASE_URL && env.RENDER_EXTERNAL_URL) {
+    return { ...env, APP_BASE_URL: env.RENDER_EXTERNAL_URL };
+  }
+  return env;
+}
+
 export function getConfig(): AppConfig {
   if (!cached) {
-    const parsed = EnvSchema.safeParse(process.env);
+    const parsed = EnvSchema.safeParse(withRuntimeDefaults(process.env));
     if (!parsed.success) {
       const issues = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
       throw new Error(`Invalid environment configuration: ${issues}`);
@@ -70,5 +78,5 @@ export function getConfig(): AppConfig {
 
 /** Test helper: build a config from overrides without touching process.env. */
 export function buildConfig(overrides: Record<string, string | undefined> = {}): AppConfig {
-  return EnvSchema.parse({ ...process.env, ...overrides });
+  return EnvSchema.parse(withRuntimeDefaults({ ...process.env, ...overrides }));
 }

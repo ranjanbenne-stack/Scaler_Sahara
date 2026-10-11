@@ -1,11 +1,11 @@
-// SAHARA MVP data model. PostgreSQL is the source of truth.
+// SAHARA MVP data model. SQLite file, stored with the app (no separate database server).
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
   url      = env("DATABASE_URL")
 }
 
@@ -15,10 +15,10 @@ enum MemberRole {
 }
 
 enum RequestStatus {
-  RECEIVED      // persisted, classification pending or complete, no human action yet
-  NEEDS_REVIEW  // classifier failed / low confidence / possible emergency signal
-  ESCALATED     // emergency raised, awaiting acknowledgement
-  ACKNOWLEDGED  // emergency acknowledged by an authorized responder
+  RECEIVED // persisted, classification pending or complete, no human action yet
+  NEEDS_REVIEW // classifier failed / low confidence / possible emergency signal
+  ESCALATED // emergency raised, awaiting acknowledgement
+  ACKNOWLEDGED // emergency acknowledged by an authorized responder
   CLOSED
 }
 
@@ -30,19 +30,19 @@ enum Urgency {
 }
 
 enum DetectionSource {
-  RULE_SOS        // exact "SOS" keyword
-  RULE_PHRASE     // deterministic emergency phrase
-  RULE_POSSIBLE   // possible-emergency signal (floor applied, flagged for review)
-  LLM             // structured LLM classification
-  FALLBACK        // classifier unavailable or invalid output
+  RULE_SOS // exact "SOS" keyword
+  RULE_PHRASE // deterministic emergency phrase
+  RULE_POSSIBLE // possible-emergency signal (floor applied, flagged for review)
+  LLM // structured LLM classification
+  FALLBACK // classifier unavailable or invalid output
 }
 
 enum OutboxStatus {
   PENDING
   SENDING
   SENT
-  FAILED  // last attempt failed, will be retried
-  DEAD      // retries exhausted
+  FAILED // last attempt failed, will be retried
+  DEAD // retries exhausted
   CANCELLED // no longer relevant (e.g. escalation re-alert after the alert was acknowledged)
 }
 
@@ -56,7 +56,7 @@ enum NotificationKind {
 }
 
 model User {
-  id           String   @id @default(uuid()) @db.Uuid
+  id           String   @id @default(uuid())
   displayName  String
   email        String?  @unique
   passwordHash String?
@@ -66,15 +66,15 @@ model User {
   memberships   HouseholdMembership[]
   telegram      TelegramAccount?
   sessions      Session[]
-  requests      Request[]             @relation("ParentRequests")
-  acknowledged  Request[]             @relation("AckBy")
+  requests      Request[]            @relation("ParentRequests")
+  acknowledged  Request[]            @relation("AckBy")
   notifications NotificationOutbox[]
 
   @@map("users")
 }
 
 model Household {
-  id        String   @id @default(uuid()) @db.Uuid
+  id        String   @id @default(uuid())
   name      String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -87,9 +87,9 @@ model Household {
 }
 
 model HouseholdMembership {
-  id                 String     @id @default(uuid()) @db.Uuid
-  householdId        String     @db.Uuid
-  userId             String     @db.Uuid
+  id                 String     @id @default(uuid())
+  householdId        String
+  userId             String
   role               MemberRole
   isEmergencyContact Boolean    @default(false)
   // Lower numbers are notified first; escalation proceeds to the next order value.
@@ -105,11 +105,11 @@ model HouseholdMembership {
 }
 
 model TelegramAccount {
-  id             String   @id @default(uuid()) @db.Uuid
-  userId         String   @unique @db.Uuid
+  id             String   @id @default(uuid())
+  userId         String   @unique
   telegramUserId BigInt   @unique
   chatId         BigInt
-  username       String?  // informational only; NEVER used for identity
+  username       String? // informational only; NEVER used for identity
   // True once the user has sent /start in a private chat, so the bot may DM them.
   botStarted     Boolean  @default(false)
   linkedAt       DateTime @default(now())
@@ -120,13 +120,13 @@ model TelegramAccount {
 }
 
 model PairingCode {
-  id                   String     @id @default(uuid()) @db.Uuid
-  householdId          String     @db.Uuid
-  createdById          String     @db.Uuid
-  role                 MemberRole
+  id           String     @id @default(uuid())
+  householdId  String
+  createdById  String
+  role         MemberRole
   // For a CHILD code: the dashboard user the Telegram account will be linked to.
   // For a PARENT code: null until redeemed (a parent user is created/linked on redemption).
-  targetUserId         String?    @db.Uuid
+  targetUserId         String?
   parentDisplayName    String?
   codeHash             String     @unique
   expiresAt            DateTime
@@ -141,9 +141,9 @@ model PairingCode {
 }
 
 model Session {
-  id        String   @id @default(uuid()) @db.Uuid
+  id        String   @id @default(uuid())
   tokenHash String   @unique
-  userId    String   @db.Uuid
+  userId    String
   expiresAt DateTime
   createdAt DateTime @default(now())
 
@@ -158,35 +158,35 @@ model TelegramUpdate {
   updateId   BigInt   @id
   receivedAt DateTime @default(now())
   outcome    String
-  requestId  String?  @db.Uuid
+  requestId  String?
 
   @@map("telegram_updates")
 }
 
 model Request {
-  id                   String          @id @default(uuid()) @db.Uuid
-  reference            Int             @unique @default(autoincrement())
-  householdId          String          @db.Uuid
-  parentUserId         String          @db.Uuid
-  telegramUpdateId     BigInt?         @unique
-  originalMessage      String
-  category             String
-  serviceType          String?
-  issueSummary         String?
-  urgency              Urgency
-  isEmergency          Boolean         @default(false)
-  confidence           Float?
-  needsReview          Boolean         @default(false)
+  id                    String          @id @default(uuid())
+  reference             Int             @unique
+  householdId           String
+  parentUserId          String
+  telegramUpdateId      BigInt?         @unique
+  originalMessage       String
+  category              String
+  serviceType           String?
+  issueSummary          String?
+  urgency               Urgency
+  isEmergency           Boolean         @default(false)
+  confidence            Float?
+  needsReview           Boolean         @default(false)
   clarificationQuestion String?
-  status               RequestStatus   @default(RECEIVED)
-  detectionSource      DetectionSource
-  classificationMeta   Json?
-  acknowledgedAt       DateTime?
-  acknowledgedById     String?         @db.Uuid
-  escalationLevel      Int             @default(0)
-  nextEscalationAt     DateTime?
-  createdAt            DateTime        @default(now())
-  updatedAt            DateTime        @updatedAt
+  status                RequestStatus   @default(RECEIVED)
+  detectionSource       DetectionSource
+  classificationMeta    Json?
+  acknowledgedAt        DateTime?
+  acknowledgedById      String?
+  escalationLevel       Int             @default(0)
+  nextEscalationAt      DateTime?
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
 
   household      Household            @relation(fields: [householdId], references: [id], onDelete: Cascade)
   parent         User                 @relation("ParentRequests", fields: [parentUserId], references: [id])
@@ -200,10 +200,10 @@ model Request {
 }
 
 model RequestEvent {
-  id          String   @id @default(uuid()) @db.Uuid
-  requestId   String   @db.Uuid
-  type        String   // RECEIVED, EMERGENCY_DETECTED, CLASSIFIED, CLASSIFICATION_FAILED, ESCALATED, NOTIFICATION_*, ACKNOWLEDGED ...
-  actorUserId String?  @db.Uuid
+  id          String   @id @default(uuid())
+  requestId   String
+  type        String // RECEIVED, EMERGENCY_DETECTED, CLASSIFIED, CLASSIFICATION_FAILED, ESCALATED, NOTIFICATION_*, ACKNOWLEDGED ...
+  actorUserId String?
   data        Json?
   createdAt   DateTime @default(now())
 
@@ -214,9 +214,9 @@ model RequestEvent {
 }
 
 model NotificationOutbox {
-  id                String           @id @default(uuid()) @db.Uuid
-  requestId         String?          @db.Uuid
-  recipientUserId   String           @db.Uuid
+  id                String           @id @default(uuid())
+  requestId         String?
+  recipientUserId   String
   channel           String           @default("telegram")
   kind              NotificationKind
   chatId            BigInt
@@ -237,6 +237,14 @@ model NotificationOutbox {
 
   @@index([status, nextAttemptAt])
   @@map("notification_outbox")
+}
+
+// One row. Incremented in a single SQLite statement so reference numbers stay unique.
+model RequestCounter {
+  id    Int @id
+  value Int @default(0)
+
+  @@map("request_counters")
 }
 
 model RateLimitBucket {

@@ -1,10 +1,11 @@
 /**
  * Background worker: emergency escalation + notification retries + recovery.
  *   npm run worker
- * Safe to run multiple instances (row claiming uses SKIP LOCKED / optimistic guards).
+ * Local development only. Production starts this loop inside the Next.js server.
  */
 import "./load-env";
 import { getDeps } from "../src/lib/deps";
+import { prepareSqlite } from "../src/lib/db";
 import { workerTick } from "../src/lib/worker";
 import { log } from "../src/lib/logger";
 
@@ -12,6 +13,7 @@ const deps = getDeps();
 let running = true;
 
 async function loop() {
+  await prepareSqlite(deps.db);
   log.info("worker started", { intervalMs: deps.config.WORKER_INTERVAL_MS, ackTimeoutSec: deps.config.ESCALATION_ACK_TIMEOUT_SECONDS });
   while (running) {
     try {

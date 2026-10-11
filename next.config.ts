@@ -10,7 +10,7 @@ const securityHeaders = [
 const nextConfig: NextConfig = {
   poweredByHeader: false,
   distDir: process.env.NEXT_DIST_DIR || ".next",
-  serverExternalPackages: ["@prisma/client", "embedded-postgres"],
+  serverExternalPackages: ["@prisma/client"],
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },

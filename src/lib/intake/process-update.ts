@@ -15,6 +15,7 @@ import {
   type RequestSummary,
 } from "../notifications/messages";
 import { rateLimit } from "../ratelimit";
+import { nextRequestReference } from "../requests/reference";
 import { redeemPairingCode } from "../auth/pairing";
 import { log } from "../logger";
 
@@ -224,8 +225,10 @@ async function handleEmergency(deps: Deps, ctx: IntakeCtx): Promise<IntakeResult
     const out = await deps.db.$transaction(async (tx) => {
       if (!(await claimUpdate(deps, ctx.updateId, "emergency_created", tx))) return null;
 
+      const reference = await nextRequestReference(tx);
       const req = await tx.request.create({
         data: {
+          reference,
           householdId: ctx.householdId,
           parentUserId: ctx.parentId,
           telegramUpdateId: ctx.updateId,
@@ -313,8 +316,10 @@ async function handleRequest(deps: Deps, ctx: IntakeCtx): Promise<IntakeResult> 
   try {
     const created = await deps.db.$transaction(async (tx) => {
       if (!(await claimUpdate(deps, ctx.updateId, "request_created", tx))) return null;
+      const reference = await nextRequestReference(tx);
       const req = await tx.request.create({
         data: {
+          reference,
           householdId: ctx.householdId,
           parentUserId: ctx.parentId,
           telegramUpdateId: ctx.updateId,
@@ -505,6 +510,54 @@ async function notifyChildren(
     );
   });
   await dispatchOutbox(deps, { ids }).catch((e) => log.error("dispatch error", { requestId, err: String(e) }));
+}
+
+/**
+ * A request can be saved and classified, then fail while the alert is queued.
+ * Telegram will not deliver that update again, so the worker retries the alert.
+ */
+export async function repairUnnotifiedRequests(deps: Deps): Promise<number> {
+  const cutoff = new Date(deps.now().getTime() - 10_000);
+  const rows = await deps.db.request.findMany({
+    where: {
+      createdAt: { lt: cutoff },
+      notifications: { none: {} },
+      NOT: { classificationMeta: { equals: Prisma.DbNull } },
+    },
+    include: { household: true, parent: { include: { telegram: true } } },
+    take: 20,
+  });
+  let repaired = 0;
+  for (const req of rows) {
+    if (!req.parent.telegram) continue;
+    const ctx = {
+      text: req.originalMessage,
+      householdId: req.householdId,
+      householdName: req.household.name,
+      parentName: req.parent.displayName,
+      parentId: req.parentUserId,
+      parentChatId: req.parent.telegram.chatId,
+    };
+    if (req.isEmergency) {
+      await promoteToEmergency(deps, req.id, ctx, {
+        provider: "repair",
+        model: "repair",
+        confidence: req.confidence ?? 1,
+      });
+    } else {
+      const attention = req.urgency === "urgent" || req.needsReview;
+      await notifyChildren(
+        deps,
+        req.id,
+        ctx,
+        attention ? "ATTENTION" : "NORMAL",
+        attention ? (req.urgency === "urgent" ? "Marked urgent" : "Needs review") : undefined,
+      );
+      await sendParentReceipt(deps, req.id, ctx, attention ? "attention" : "normal");
+    }
+    repaired++;
+  }
+  return repaired;
 }
 
 async function sendParentReceipt(

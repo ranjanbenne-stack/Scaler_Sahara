@@ -10,10 +10,23 @@ import type { Classification } from "../src/lib/classifier/schema";
 export const db = new PrismaClient();
 
 export async function resetDb() {
-  await db.$executeRawUnsafe(`
-    TRUNCATE TABLE request_events, notification_outbox, requests, telegram_updates, pairing_codes,
-      sessions, telegram_accounts, household_memberships, households, users, rate_limit_buckets
-    RESTART IDENTITY CASCADE`);
+  const tables = [
+    "request_events",
+    "notification_outbox",
+    "requests",
+    "telegram_updates",
+    "pairing_codes",
+    "sessions",
+    "telegram_accounts",
+    "household_memberships",
+    "households",
+    "users",
+    "rate_limit_buckets",
+    "request_counters",
+  ];
+  for (const table of tables) {
+    await db.$executeRawUnsafe(`DELETE FROM "${table}"`);
+  }
 }
 
 /** Records every outbound message; can be scripted to fail. */

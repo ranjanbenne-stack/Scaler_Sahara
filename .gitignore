@@ -4,6 +4,11 @@ out/
 coverage/
 .pgdata/
 .pgdata-test/
+data/
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
 *.log
 .env
 .env.*

@@ -5,14 +5,13 @@
   "description": "SAHARA MVP — Telegram intake, LLM classification, child dashboard and SOS alerts",
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
+    "build": "prisma generate && next build",
+    "start": "node scripts/prepare-sqlite.mjs && prisma migrate deploy && next start",
     "worker": "tsx scripts/worker.ts",
     "bot:poll": "tsx scripts/poll-telegram.ts",
     "bot:set-webhook": "tsx scripts/set-webhook.ts",
     "bot:simulate": "tsx scripts/simulate-message.ts",
     "dev:all": "concurrently -n web,worker,bot -c blue,magenta,green \"npm:dev\" \"npm:worker\" \"npm:bot:poll\"",
-    "db:local": "tsx scripts/local-db.ts",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
     "db:seed-demo": "tsx scripts/seed-demo.ts",
@@ -23,6 +22,7 @@
   "dependencies": {
     "@prisma/client": "^6.19.3",
     "next": "^15.5.27",
+    "prisma": "^6.19.3",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "server-only": "^0.0.1",
@@ -33,10 +33,14 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "concurrently": "^10.0.6",
-    "embedded-postgres": "^18.4.0-beta.17",
-    "prisma": "^6.19.3",
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",
     "vitest": "^3.2.7"
+  },
+  "allowScripts": {
+    "@prisma/client@6.19.3": true,
+    "@prisma/engines@6.19.3": true,
+    "esbuild@0.28.2": true,
+    "prisma@6.19.3": true
   }
 }

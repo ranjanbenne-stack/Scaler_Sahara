@@ -1,18 +1,17 @@
-import { Prisma, PrismaClient } from "@prisma/client";
+import { PrismaClient } from "@prisma/client";
 
-/**
- * Prisma stores DateTime as UTC in `timestamp` (no time zone) columns. Raw SQL
- * Date parameters would otherwise be converted using the DB session time zone,
- * so always pass timestamps to raw queries through this helper.
- */
-export function utcTs(d: Date): Prisma.Sql {
-  return Prisma.sql`(${d.toISOString()}::timestamptz AT TIME ZONE 'UTC')`;
-}
-
-const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
+const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient; sqliteReady?: Promise<void> };
 
 export const prisma: PrismaClient = globalForPrisma.prisma ?? new PrismaClient();
+globalForPrisma.prisma = prisma;
 
-if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
+/** SQLite allows one writer. WAL plus a busy timeout lets the web app and in-process worker share the file. */
+export function prepareSqlite(client: PrismaClient = prisma): Promise<void> {
+  globalForPrisma.sqliteReady ??= client
+    .$queryRawUnsafe("PRAGMA journal_mode = WAL")
+    .then(() => client.$queryRawUnsafe("PRAGMA busy_timeout = 5000"))
+    .then(() => undefined);
+  return globalForPrisma.sqliteReady;
+}
 
 export type Db = PrismaClient;

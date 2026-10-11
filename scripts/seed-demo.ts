@@ -8,6 +8,7 @@
 import "./load-env";
 import { getDeps } from "../src/lib/deps";
 import { hashPassword } from "../src/lib/auth/crypto";
+import { nextRequestReference } from "../src/lib/requests/reference";
 
 async function main() {
   const deps = getDeps();
@@ -36,21 +37,26 @@ async function main() {
     { msg: "My blood pressure tablets will finish in two days", category: "medicine_refill", serviceType: "pharmacy", issueSummary: "Blood pressure medication running out", urgency: "time_sensitive" as const, status: "RECEIVED" as const, ago: 7200_000 },
   ];
   for (const s of samples) {
-    const req = await deps.db.request.create({
-      data: {
-        householdId: household.id,
-        parentUserId: parent.id,
-        originalMessage: s.msg,
-        category: s.category,
-        serviceType: s.serviceType,
-        issueSummary: s.issueSummary,
-        urgency: s.urgency,
-        confidence: 0.9,
-        status: s.status,
-        detectionSource: "LLM",
-        classificationMeta: { demo: true },
-        createdAt: new Date(now - s.ago),
-      },
+    const req = await deps.db.$transaction(async (tx) => {
+      const reference = await nextRequestReference(tx);
+      const created = await tx.request.create({
+        data: {
+          reference,
+          householdId: household.id,
+          parentUserId: parent.id,
+          originalMessage: s.msg,
+          category: s.category,
+          serviceType: s.serviceType,
+          issueSummary: s.issueSummary,
+          urgency: s.urgency,
+          confidence: 0.9,
+          status: s.status,
+          detectionSource: "LLM",
+          classificationMeta: { demo: true },
+          createdAt: new Date(now - s.ago),
+        },
+      });
+      return created;
     });
     await deps.db.requestEvent.createMany({
       data: [

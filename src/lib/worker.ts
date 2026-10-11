@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import type { Deps } from "./deps";
 import { dispatchOutbox, reclaimStuckSending } from "./notifications/outbox";
 import { runEscalations } from "./escalation/escalation";
-import { classifyAndFinalize } from "./intake/process-update";
+import { classifyAndFinalize, repairUnnotifiedRequests } from "./intake/process-update";
 import { pruneRateLimits } from "./ratelimit";
 import { log } from "./logger";
 
@@ -42,9 +42,10 @@ export async function workerTick(deps: Deps) {
   const reclaimed = await reclaimStuckSending(deps);
   const dispatched = await dispatchOutbox(deps, { limit: 100 });
   const recovered = await recoverUnclassified(deps);
+  const repaired = await repairUnnotifiedRequests(deps);
   await pruneRateLimits(deps);
-  if (escalated || reclaimed || dispatched.sent || dispatched.failed || dispatched.dead || recovered) {
-    log.info("worker tick", { escalated, reclaimed, ...dispatched, recovered });
+  if (escalated || reclaimed || dispatched.sent || dispatched.failed || dispatched.dead || recovered || repaired) {
+    log.info("worker tick", { escalated, reclaimed, ...dispatched, recovered, repaired });
   }
-  return { escalated, reclaimed, dispatched, recovered };
+  return { escalated, reclaimed, dispatched, recovered, repaired };
 }
