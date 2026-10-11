@@ -2,6 +2,8 @@
 
 import { use, useState } from "react";
 import Link from "next/link";
+import BookingPanel, { VisitTimeline } from "@/components/BookingPanel";
+import { offersForRequest } from "@/lib/booking/catalog";
 import { usePoll } from "@/components/usePoll";
 import { fmtTime, label } from "@/components/format";
 
@@ -29,6 +31,17 @@ interface Detail {
     parent: { displayName: string };
     household: { name: string };
     acknowledgedBy: { displayName: string } | null;
+    booking: {
+      serviceCode: string;
+      serviceLabel: string;
+      helperLabel: string;
+      visitLabel: string;
+      estimatedCostInr: number;
+      includes: string;
+      question: string | null;
+      status: string;
+      createdAt: string;
+    } | null;
     events: { id: string; type: string; createdAt: string; data: Record<string, unknown> | null }[];
     notifications: {
       id: string;
@@ -67,6 +80,9 @@ function eventText(e: Detail["request"]["events"][number]): string {
     case "NOTIFICATION_DEAD": return `Notification failed permanently: ${d.error}`;
     case "NOTIFICATION_FALLBACK": return `Delivery fallback: ${d.reason}`;
     case "ACKNOWLEDGED": return `Acknowledged by ${d.byName}`;
+    case "BOOKING_CREATED": return `Visit booked: ${d.service} · ${d.when} · ₹${d.estimateInr}`;
+    case "BOOKING_UPDATED": return `Visit update: ${label(String(d.status))} by ${d.byName}`;
+    case "QUESTION_SENT": return `Question sent to parent: ${d.question}`;
     case "NO_REACHABLE_CONTACT": return "No family member reachable on Telegram";
     default: return label(e.type);
   }
@@ -90,6 +106,8 @@ export default function RequestDetailPage({ params }: { params: Promise<{ id: st
   if (!data) return <p className="muted">Loading…</p>;
   const r = data.request;
   const unacked = r.isEmergency && r.status === "ESCALATED";
+  const canAckRequest = !r.isEmergency && (r.status === "RECEIVED" || r.status === "NEEDS_REVIEW");
+  const canBook = offersForRequest(r).length > 0 || Boolean(r.booking);
 
   async function acknowledge() {
     setAckBusy(true);
@@ -103,6 +121,23 @@ export default function RequestDetailPage({ params }: { params: Promise<{ id: st
   return (
     <>
       <p><Link href="/dashboard/requests">← All requests</Link></p>
+
+      {!r.isEmergency && (
+        <section className="card" style={{ marginBottom: "1rem" }}>
+          <h2 style={{ marginTop: 0 }}>Acknowledgement</h2>
+          {r.acknowledgedAt ? (
+            <p><span className="badge ACKNOWLEDGED">Acknowledged by {r.acknowledgedBy?.displayName} at {fmtTime(r.acknowledgedAt)}</span></p>
+          ) : canAckRequest ? (
+            <div className="stack">
+              <p className="muted">{canBook ? "You can book a visit below. Or mark this as seen without booking." : "Mark this request as seen. Your parent is told you have seen it. Nothing is booked."}</p>
+              <div><button onClick={acknowledge} disabled={ackBusy}>{ackBusy ? "Acknowledging…" : "Acknowledge request"}</button></div>
+              {ackError && <p className="error">{ackError}</p>}
+            </div>
+          ) : (
+            <p className="muted">This request is {label(r.status).toLowerCase()}.</p>
+          )}
+        </section>
+      )}
 
       {r.isEmergency && (
         <section className={`card ${unacked ? "emergency-panel" : ""}`} style={{ marginBottom: "1rem" }}>
@@ -136,13 +171,24 @@ export default function RequestDetailPage({ params }: { params: Promise<{ id: st
         </section>
       )}
 
+      {canBook && (
+        <div className="grid-2" style={{ marginBottom: "1rem" }}>
+          <VisitTimeline request={r} />
+          <BookingPanel request={r} onChange={reload} />
+        </div>
+      )}
+
       <div className="grid-2">
         <section className="card">
           <h2 style={{ marginTop: 0 }}>Request #{r.reference}</h2>
           <p className="muted">From {r.parent.displayName} · {fmtTime(r.createdAt)}</p>
           <div className="quote">{r.originalMessage}</div>
           {r.clarificationQuestion && <p><strong>Suggested clarification:</strong> {r.clarificationQuestion}</p>}
-          <p className="muted" style={{ fontSize: "0.85rem" }}>No service has been booked. SAHARA currently records and notifies only.</p>
+          <p className="muted" style={{ fontSize: "0.85rem" }}>
+            {r.booking && r.booking.status !== "CANCELLED"
+              ? `${r.booking.serviceLabel} · ${r.booking.visitLabel}. Estimate only — SAHARA does not take payment.`
+              : "No visit is booked yet."}
+          </p>
         </section>
 
         <section className="card">

@@ -255,11 +255,11 @@ Monitor `notification_outbox` rows in `DEAD` and `ESCALATED` requests that stay 
 ---
 
 ## 11. Known limitations and remaining work
-- **Not built:** service booking, helper dispatch, payments, contacting emergency services.
+- **Not built:** helper dispatch, payments, contacting emergency services. A child can book an estimated home visit from the dashboard; SAHARA does not send a helper or take payment.
 - **Dashboard updates by polling** (every 3–5 s). SSE or WebSockets would cut latency.
-- **Only one dashboard user per household can register directly.** The data model supports several children, but there's no "invite another child to an existing household" flow yet (add the membership directly in the DB for now).
+- **Family members are added from the household page** by name. That page shows a one-time `/link` code for their phone. No email is sent. Each signed-in member can also add another household.
 - **No password reset, email verification or MFA.** Pairing codes can be revoked only by generating a new code (which expires the old one).
-- **No request lifecycle actions beyond emergency acknowledgement** (e.g. close or resolve a normal request), and no in-app clarification round-trip with the parent.
+- **Ordinary requests can be acknowledged, booked, updated, or cancelled** from the request page. A child can also send a short question to the parent.
 - **The emergency phrase list is English-only.** Extend `detect.ts` for other languages (Hindi, etc.) and test with real elderly users.
 - **Voice notes, photos and location** from Telegram are ignored. Only text is processed.
 - **Telegram is the only real channel** (see §8).

@@ -2,7 +2,7 @@ import type { Deps } from "../deps";
 import { EventType, recordEvent } from "../events";
 import { enqueueNotifications, dispatchOutbox } from "../notifications/outbox";
 import { emergencyLevels } from "../notifications/recipients";
-import { emergencyMessage, requestLink, emergencyAckToParentMessage } from "../notifications/messages";
+import { emergencyMessage, requestLink, emergencyAckToParentMessage, requestAckToParentMessage } from "../notifications/messages";
 import { log } from "../logger";
 
 /**
@@ -91,23 +91,29 @@ export async function runEscalations(deps: Deps): Promise<number> {
 
 export type AckResult =
   | { ok: true; alreadyAcknowledged: boolean; acknowledgedAt: Date; acknowledgedById: string }
-  | { ok: false; reason: "not_found" | "not_emergency" };
+  | { ok: false; reason: "not_found" | "not_open" };
+
+const OPENABLE = ["RECEIVED", "NEEDS_REVIEW"] as const;
 
 /**
- * Acknowledge an emergency. Caller must already have verified the user is an
- * authorized CHILD member of the request's household (see requests/access.ts).
+ * Acknowledge a request. Emergencies must still be ESCALATED; ordinary tickets
+ * can be RECEIVED or NEEDS_REVIEW. Caller must already have verified the user
+ * is an authorized CHILD member of the request's household.
  */
 export async function acknowledgeEmergency(deps: Deps, requestId: string, userId: string): Promise<AckResult> {
   const now = deps.now();
   const out = await deps.db.$transaction(async (tx) => {
     const req = await tx.request.findUnique({ where: { id: requestId }, include: { parent: { include: { telegram: true } } } });
     if (!req) return { ok: false, reason: "not_found" } as const;
-    if (!req.isEmergency) return { ok: false, reason: "not_emergency" } as const;
-    if (req.status !== "ESCALATED" && req.acknowledgedAt && req.acknowledgedById) {
-      return { ok: true, alreadyAcknowledged: true, acknowledgedAt: req.acknowledgedAt, acknowledgedById: req.acknowledgedById, notify: [] as string[] } as const;
+    const open = req.isEmergency ? req.status === "ESCALATED" : (OPENABLE as readonly string[]).includes(req.status);
+    if (!open) {
+      if (req.acknowledgedAt && req.acknowledgedById) {
+        return { ok: true, alreadyAcknowledged: true, acknowledgedAt: req.acknowledgedAt, acknowledgedById: req.acknowledgedById, notify: [] as string[] } as const;
+      }
+      return { ok: false, reason: "not_open" } as const;
     }
     const updated = await tx.request.updateMany({
-      where: { id: requestId, status: "ESCALATED" },
+      where: { id: requestId, status: req.isEmergency ? "ESCALATED" : { in: [...OPENABLE] } },
       data: { status: "ACKNOWLEDGED", acknowledgedAt: now, acknowledgedById: userId, nextEscalationAt: null },
     });
     if (updated.count === 0) {
@@ -129,7 +135,7 @@ export async function acknowledgeEmergency(deps: Deps, requestId: string, userId
           recipientUserId: req.parentUserId,
           chatId: req.parent.telegram.chatId,
           kind: "PARENT_ACK",
-          text: emergencyAckToParentMessage(responder.displayName),
+          text: req.isEmergency ? emergencyAckToParentMessage(responder.displayName) : requestAckToParentMessage(responder.displayName, req.reference),
           idempotencyKey: `ack:${requestId}`,
         },
       ]);

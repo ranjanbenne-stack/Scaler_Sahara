@@ -43,7 +43,7 @@ export function normalRequestMessage(r: RequestSummary, link: string): string {
     `Issue: ${r.issueSummary ?? "See dashboard"}`,
     `Urgency: ${URGENCY_LABEL[r.urgency] ?? r.urgency}`,
     `Reference: #${r.reference}`,
-    "No service has been booked. Open the SAHARA dashboard to view the request:",
+    "No service has been booked yet. If this is a home repair, you can book a visit from the dashboard:",
     link,
   ].join("\n");
 }
@@ -95,4 +95,33 @@ export function parentReceiptMessage(kind: "normal" | "attention" | "emergency",
 
 export function emergencyAckToParentMessage(responderName: string): string {
   return `SAHARA: ${responderName} has seen your SOS alert and is responding.`;
+}
+
+export function requestAckToParentMessage(responderName: string, reference: number): string {
+  return `SAHARA: ${responderName} has seen your request (ref #${reference}). Nothing has been booked yet.`;
+}
+
+export function visitBookedMessage(responderName: string, service: string, when: string, estimateInr: number, reference: number): string {
+  return [
+    `SAHARA: ${responderName} booked a ${service} visit for your request (ref #${reference}).`,
+    `When: ${when}`,
+    `Estimate: ₹${estimateInr} for the visit and basic labour. This is not a payment.`,
+    "A helper is not sent automatically. Your family will update you as the visit moves ahead.",
+  ].join("\n");
+}
+
+export function bookingUpdateMessage(responderName: string, service: string, status: string, reference: number): string {
+  const line =
+    status === "CONFIRMED"
+      ? `${responderName} confirmed the ${service} visit (ref #${reference}).`
+      : status === "EN_ROUTE"
+        ? `${responderName} marked the ${service} visit as on the way (ref #${reference}).`
+        : status === "COMPLETED"
+          ? `${responderName} marked the ${service} visit complete (ref #${reference}).`
+          : `${responderName} cancelled the ${service} visit (ref #${reference}). You can ask them to book another time.`;
+  return `SAHARA: ${line}`;
+}
+
+export function questionToParentMessage(responderName: string, reference: number, question: string): string {
+  return `SAHARA: ${responderName} has a question about your request (ref #${reference}):\n${question}`;
 }

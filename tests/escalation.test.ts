@@ -133,6 +133,35 @@ describe("emergency acknowledgement and escalation", () => {
     expect(esc.every((r) => r.status === "CANCELLED")).toBe(true);
   });
 
+  it("acknowledges a non-emergency request and tells the parent it was seen", async () => {
+    const { household, parent, child } = await seedHousehold();
+    const clock = new Clock();
+    const { deps, channel } = makeDeps({ clock });
+    const req = await db.request.create({
+      data: {
+        reference: 1,
+        householdId: household.id,
+        parentUserId: parent.id,
+        originalMessage: "Please buy milk",
+        category: "household_assistance",
+        urgency: "routine",
+        status: "RECEIVED",
+        detectionSource: "LLM",
+        isEmergency: false,
+      },
+    });
+
+    const ack = await acknowledgeEmergency(deps, req.id, child.id);
+    expect(ack).toMatchObject({ ok: true, alreadyAcknowledged: false, acknowledgedById: child.id });
+    const saved = await db.request.findUniqueOrThrow({ where: { id: req.id } });
+    expect(saved.status).toBe("ACKNOWLEDGED");
+    expect(channel.to(PARENT_TG).some((m) => m.text.includes("has seen your request"))).toBe(true);
+    expect(channel.to(PARENT_TG).some((m) => m.text.includes("SOS"))).toBe(false);
+
+    const again = await acknowledgeEmergency(deps, req.id, child.id);
+    expect(again).toMatchObject({ ok: true, alreadyAcknowledged: true });
+  });
+
   it("no reachable child: the emergency is still recorded, flagged, and the parent is told to call for help", async () => {
     const { child } = await seedHousehold();
     await db.telegramAccount.update({ where: { userId: child.id }, data: { botStarted: false } });

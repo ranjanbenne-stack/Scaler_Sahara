@@ -18,8 +18,8 @@ export default async function DashboardLayout({ children }: { children: React.Re
       <header className="topbar">
         <div className="shell">
           <span className="brand">SAHARA</span>
-          <nav className="row">
-            <Link href="/dashboard">Overview</Link>
+          <nav className="row main-nav">
+            <Link href="/dashboard">Home</Link>
             <Link href="/dashboard/requests">Requests</Link>
             <Link href="/dashboard/household">Household</Link>
           </nav>
@@ -31,6 +31,11 @@ export default async function DashboardLayout({ children }: { children: React.Re
         <EmergencyBanner />
         {children}
       </main>
+      <nav className="tabbar">
+        <Link href="/dashboard">Home</Link>
+        <Link href="/dashboard/requests">Requests</Link>
+        <Link href="/dashboard/household">Household</Link>
+      </nav>
     </>
   );
 }

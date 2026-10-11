@@ -35,6 +35,9 @@ const listSelect = {
   escalationLevel: true,
   parent: { select: { id: true, displayName: true } },
   household: { select: { id: true, name: true } },
+  booking: {
+    select: { status: true, serviceLabel: true, helperLabel: true, visitLabel: true, estimatedCostInr: true },
+  },
 } satisfies Prisma.RequestSelect;
 
 export async function listRequestsForUser(
@@ -66,6 +69,7 @@ export async function getRequestForUser(deps: Pick<Deps, "db">, userId: string, 
       parent: { select: { id: true, displayName: true } },
       household: { select: { id: true, name: true } },
       acknowledgedBy: { select: { id: true, displayName: true } },
+      booking: true,
       events: { orderBy: { createdAt: "asc" } },
       notifications: {
         orderBy: { createdAt: "asc" },
@@ -88,12 +92,22 @@ export async function getRequestForUser(deps: Pick<Deps, "db">, userId: string, 
 
 export async function overviewForUser(deps: Pick<Deps, "db">, userId: string) {
   const householdIds = await childHouseholdIds(deps, userId);
-  if (householdIds.length === 0) return { open: 0, attention: 0, activeEmergencies: 0 };
+  if (householdIds.length === 0) return { open: 0, attention: 0, activeEmergencies: 0, needsBooking: 0, openTasks: 0 };
   const scope = { householdId: { in: householdIds } };
-  const [open, attention, activeEmergencies] = await Promise.all([
+  const [open, attention, activeEmergencies, needsBooking, openTasks] = await Promise.all([
     deps.db.request.count({ where: { ...scope, status: { in: ["RECEIVED", "NEEDS_REVIEW", "ESCALATED"] } } }),
     deps.db.request.count({ where: { ...scope, OR: [{ status: "NEEDS_REVIEW" }, { status: "ESCALATED" }, { urgency: "urgent" , status: { not: "CLOSED" } }] } }),
     deps.db.request.count({ where: { ...scope, isEmergency: true, status: "ESCALATED" } }),
+    deps.db.request.count({
+      where: {
+        ...scope,
+        isEmergency: false,
+        status: { in: ["RECEIVED", "NEEDS_REVIEW", "ACKNOWLEDGED"] },
+        category: { in: ["home_maintenance", "technology_support"] },
+        OR: [{ booking: { is: null } }, { booking: { status: "CANCELLED" } }],
+      },
+    }),
+    deps.db.request.count({ where: { ...scope, status: { not: "CLOSED" } } }),
   ]);
-  return { open, attention, activeEmergencies };
+  return { open, attention, activeEmergencies, needsBooking, openTasks };
 }

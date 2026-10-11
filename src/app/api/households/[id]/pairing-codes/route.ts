@@ -9,7 +9,7 @@ import { rateLimit } from "@/lib/ratelimit";
 export const runtime = "nodejs";
 
 const Body = z.discriminatedUnion("role", [
-  z.object({ role: z.literal("CHILD") }),
+  z.object({ role: z.literal("CHILD"), targetUserId: z.string().uuid().optional() }),
   z.object({ role: z.literal("PARENT"), parentDisplayName: z.string().trim().min(1).max(80) }),
 ]);
 
@@ -25,11 +25,20 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const parsed = Body.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return errors.badRequest(parsed.error.flatten().fieldErrors);
 
+  let targetUserId = parsed.data.role === "CHILD" ? user.id : undefined;
+  if (parsed.data.role === "CHILD" && parsed.data.targetUserId) {
+    const member = await deps.db.householdMembership.findFirst({
+      where: { householdId, userId: parsed.data.targetUserId, role: "CHILD" },
+    });
+    if (!member) return errors.notFound();
+    targetUserId = member.userId;
+  }
+
   const { code, expiresAt } = await createPairingCode(deps, {
     householdId,
     createdById: user.id,
     role: parsed.data.role,
-    targetUserId: parsed.data.role === "CHILD" ? user.id : undefined,
+    targetUserId,
     parentDisplayName: parsed.data.role === "PARENT" ? parsed.data.parentDisplayName : undefined,
   });
   return json({ code, expiresAt });

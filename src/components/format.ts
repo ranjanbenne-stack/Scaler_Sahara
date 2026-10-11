@@ -1,3 +1,5 @@
+import { offersForRequest } from "@/lib/booking/catalog";
+
 export function fmtTime(iso: string | null | undefined): string {
   if (!iso) return "—";
   return new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
@@ -32,4 +34,22 @@ export interface RequestRow {
   escalationLevel: number;
   parent: { id: string; displayName: string };
   household: { id: string; name: string };
+  booking?: {
+    status: string;
+    serviceLabel: string;
+    helperLabel: string;
+    visitLabel: string;
+    estimatedCostInr: number;
+  } | null;
+}
+
+export function careChip(r: Pick<RequestRow, "isEmergency" | "status" | "category" | "serviceType" | "issueSummary" | "originalMessage" | "booking">): { tone: string; text: string } {
+  if (r.isEmergency && r.status === "ESCALATED") return { tone: "alert", text: "Needs you" };
+  if (r.booking?.status === "EN_ROUTE") return { tone: "progress", text: "On the way" };
+  if (r.booking?.status === "CONFIRMED" || r.booking?.status === "BOOKED") return { tone: "assigned", text: "Visit booked" };
+  if (r.booking?.status === "COMPLETED" || r.status === "CLOSED") return { tone: "done", text: "Complete" };
+  const bookable = offersForRequest(r).length > 0 && r.booking?.status !== "CANCELLED";
+  if (bookable && !r.booking) return { tone: "approval", text: "Approval required" };
+  if (r.booking?.status === "CANCELLED") return { tone: "approval", text: "Book again" };
+  return { tone: "open", text: label(r.status) };
 }

@@ -22,6 +22,14 @@ enum RequestStatus {
   CLOSED
 }
 
+enum BookingStatus {
+  BOOKED
+  CONFIRMED
+  EN_ROUTE
+  COMPLETED
+  CANCELLED
+}
+
 enum Urgency {
   routine
   time_sensitive
@@ -68,6 +76,7 @@ model User {
   sessions      Session[]
   requests      Request[]            @relation("ParentRequests")
   acknowledged  Request[]            @relation("AckBy")
+  bookings      Booking[]            @relation("BookedBy")
   notifications NotificationOutbox[]
 
   @@map("users")
@@ -193,6 +202,7 @@ model Request {
   acknowledgedBy User?                @relation("AckBy", fields: [acknowledgedById], references: [id])
   events         RequestEvent[]
   notifications  NotificationOutbox[]
+  booking        Booking?
 
   @@index([householdId, createdAt])
   @@index([isEmergency, status, nextEscalationAt])
@@ -211,6 +221,29 @@ model RequestEvent {
 
   @@index([requestId, createdAt])
   @@map("request_events")
+}
+
+// A visit the child books from a parent's handyman request. The cost is an
+// estimate the family agrees to. SAHARA does not take payment or dispatch a helper.
+model Booking {
+  id               String        @id @default(uuid())
+  requestId        String        @unique
+  bookedById       String
+  serviceCode      String
+  serviceLabel     String
+  helperLabel      String
+  visitLabel       String
+  estimatedCostInr Int
+  includes         String
+  question         String?
+  status           BookingStatus @default(BOOKED)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  request  Request @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  bookedBy User    @relation("BookedBy", fields: [bookedById], references: [id])
+
+  @@map("bookings")
 }
 
 model NotificationOutbox {

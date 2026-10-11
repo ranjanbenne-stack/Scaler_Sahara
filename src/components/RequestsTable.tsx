@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { fmtTime, label, type RequestRow } from "./format";
+import { careChip, fmtTime, label, type RequestRow } from "./format";
 
 export default function RequestsTable({ rows }: { rows: RequestRow[] }) {
   if (rows.length === 0) return <p className="muted card">No requests yet. Requests appear here automatically when your parent messages the SAHARA bot.</p>;
@@ -32,6 +32,7 @@ export default function RequestsTable({ rows }: { rows: RequestRow[] }) {
             <td data-label="Status">
               <span className={`badge ${r.status}`}>{label(r.status)}</span>
               {r.needsReview && r.status !== "NEEDS_REVIEW" && <> <span className="badge NEEDS_REVIEW">Review</span></>}
+              {careChip(r).tone === "approval" && <> <span className="badge NEEDS_REVIEW">Book visit</span></>}
             </td>
           </tr>
         ))}
